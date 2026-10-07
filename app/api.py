@@ -88,6 +88,12 @@ def create_app(settings: Optional[Settings] = None, payment_gateway: Optional[Pa
             return _error(503, "SERVICE_BUSY", "The store is busy; retry the request.", headers={"Retry-After": "1"})
         return _error(500, "INTERNAL_ERROR", "Unexpected database error.")
 
+    @app.exception_handler(Exception)
+    def handle_unexpected(_: Request, exc: Exception):
+        # Includes constraint violations (sqlite3.IntegrityError): those are invariant
+        # backstops firing, i.e. a bug, so they are not presented as client errors.
+        return _error(500, "INTERNAL_ERROR", "Unexpected server error.")
+
     # ---- catalog --------------------------------------------------------------------
 
     @app.get("/products")
