@@ -4,15 +4,16 @@ overlapping requests really do execute concurrently against the database."""
 import sqlite3
 from typing import Iterator, Optional
 
-from fastapi import Depends, FastAPI, Request, Response
+from fastapi import Body, Depends, FastAPI, Header, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, StrictInt
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from . import carts, catalog, db
+from . import carts, catalog, checkout, db, orders
 from .config import Settings
 from .errors import AppError
+from .payments import FakePaymentGateway, PaymentGateway
 
 
 def _error(status: int, code: str, message: str, details: Optional[dict] = None, headers=None) -> JSONResponse:
@@ -32,13 +33,21 @@ class SetQuantity(StrictModel):
     quantity: StrictInt
 
 
+class CheckoutRequest(StrictModel):
+    coupon_code: Optional[str] = None
+    # Optional guard: if set and the cart now prices differently, checkout fails with
+    # PRICE_CHANGED instead of charging an amount the customer did not see.
+    expected_subtotal_cents: Optional[StrictInt] = None
+
+
 class ProductUpdate(StrictModel):
     unit_price_cents: Optional[StrictInt] = None
     stock: Optional[StrictInt] = None
 
 
-def create_app(settings: Optional[Settings] = None) -> FastAPI:
+def create_app(settings: Optional[Settings] = None, payment_gateway: Optional[PaymentGateway] = None) -> FastAPI:
     settings = settings or Settings.from_env()
+    gateway = payment_gateway or FakePaymentGateway()
     db.init_db(settings.database_path)
 
     app = FastAPI(
@@ -114,5 +123,38 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
     @app.delete("/carts/{cart_id}/items/{product_id}")
     def remove_cart_item(cart_id: str, product_id: str, conn=Depends(get_conn)):
         return carts.remove_item(conn, cart_id, product_id, settings)
+
+    # ---- checkout & orders ----------------------------------------------------------
+
+    @app.post("/carts/{cart_id}/checkout", status_code=201)
+    def checkout_cart(
+        cart_id: str,
+        response: Response,
+        body: Optional[CheckoutRequest] = Body(default=None),
+        idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
+        conn=Depends(get_conn),
+    ):
+        body = body or CheckoutRequest()
+        order, replayed = checkout.checkout(
+            conn,
+            settings,
+            gateway,
+            cart_id=cart_id,
+            idempotency_key=idempotency_key,
+            coupon_code=body.coupon_code,
+            expected_subtotal_cents=body.expected_subtotal_cents,
+        )
+        response.status_code = 200 if replayed else 201
+        response.headers["Location"] = f"/orders/{order['id']}"
+        response.headers["Idempotent-Replayed"] = "true" if replayed else "false"
+        return order
+
+    @app.get("/orders/{order_id}")
+    def get_order(order_id: str, conn=Depends(get_conn)):
+        return orders.get_order(conn, order_id)
+
+    @app.get("/admin/orders")
+    def list_orders(conn=Depends(get_conn)):
+        return {"orders": orders.list_orders(conn)}
 
     return app
