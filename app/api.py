@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, StrictInt
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from . import carts, catalog, checkout, db, orders
+from . import carts, catalog, checkout, coupons, db, orders, reporting
 from .config import Settings
 from .errors import AppError
 from .payments import FakePaymentGateway, PaymentGateway
@@ -156,5 +156,19 @@ def create_app(settings: Optional[Settings] = None, payment_gateway: Optional[Pa
     @app.get("/admin/orders")
     def list_orders(conn=Depends(get_conn)):
         return {"orders": orders.list_orders(conn)}
+
+    # ---- coupons & reporting (admin) ------------------------------------------------
+
+    @app.post("/admin/coupons", status_code=201)
+    def generate_coupon(conn=Depends(get_conn)):
+        return coupons.generate_coupon(conn, settings)
+
+    @app.get("/admin/coupons")
+    def list_coupons(conn=Depends(get_conn)):
+        return coupons.list_coupons(conn, settings)
+
+    @app.get("/admin/report")
+    def report(conn=Depends(get_conn)):
+        return reporting.build_report(conn, settings)
 
     return app
