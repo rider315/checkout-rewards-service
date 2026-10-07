@@ -94,6 +94,31 @@ def create_app(settings: Optional[Settings] = None, payment_gateway: Optional[Pa
         # backstops firing, i.e. a bug, so they are not presented as client errors.
         return _error(500, "INTERNAL_ERROR", "Unexpected server error.")
 
+    # ---- index ----------------------------------------------------------------------
+
+    @app.get("/", include_in_schema=False)
+    def index():
+        return {
+            "service": "Checkout and Rewards Service",
+            "docs": "/docs",
+            "openapi": "/openapi.json",
+            "endpoints": [
+                "GET /products",
+                "GET /products/{productId}",
+                "POST /carts",
+                "GET /carts/{cartId}",
+                "PUT /carts/{cartId}/items/{productId}",
+                "DELETE /carts/{cartId}/items/{productId}",
+                "POST /carts/{cartId}/checkout  (header: Idempotency-Key)",
+                "GET /orders/{orderId}",
+                "PATCH /admin/products/{productId}",
+                "POST /admin/coupons",
+                "GET /admin/coupons",
+                "GET /admin/orders",
+                "GET /admin/report",
+            ],
+        }
+
     # ---- catalog --------------------------------------------------------------------
 
     @app.get("/products")
