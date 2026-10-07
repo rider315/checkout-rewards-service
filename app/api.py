@@ -4,13 +4,13 @@ overlapping requests really do execute concurrently against the database."""
 import sqlite3
 from typing import Iterator, Optional
 
-from fastapi import Depends, FastAPI, Request
+from fastapi import Depends, FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, StrictInt
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from . import catalog, db
+from . import carts, catalog, db
 from .config import Settings
 from .errors import AppError
 
@@ -26,6 +26,10 @@ def _error(status: int, code: str, message: str, details: Optional[dict] = None,
 class StrictModel(BaseModel):
     # Reject unknown fields and type coercion ("2" or 2.0 for an integer) instead of guessing.
     model_config = ConfigDict(extra="forbid", strict=True)
+
+
+class SetQuantity(StrictModel):
+    quantity: StrictInt
 
 
 class ProductUpdate(StrictModel):
@@ -88,5 +92,27 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
     @app.patch("/admin/products/{product_id}")
     def update_product(product_id: str, body: ProductUpdate, conn=Depends(get_conn)):
         return catalog.update_product(conn, product_id, body.unit_price_cents, body.stock)
+
+    # ---- carts ----------------------------------------------------------------------
+
+    @app.post("/carts", status_code=201)
+    def create_cart(response: Response, conn=Depends(get_conn)):
+        cart = carts.create_cart(conn, settings)
+        response.headers["Location"] = f"/carts/{cart['id']}"
+        return cart
+
+    @app.get("/carts/{cart_id}")
+    def get_cart(cart_id: str, conn=Depends(get_conn)):
+        return carts.get_cart(conn, cart_id, settings)
+
+    @app.put("/carts/{cart_id}/items/{product_id}")
+    def set_cart_item(cart_id: str, product_id: str, body: SetQuantity, response: Response, conn=Depends(get_conn)):
+        cart, created = carts.set_item_quantity(conn, cart_id, product_id, body.quantity, settings)
+        response.status_code = 201 if created else 200
+        return cart
+
+    @app.delete("/carts/{cart_id}/items/{product_id}")
+    def remove_cart_item(cart_id: str, product_id: str, conn=Depends(get_conn)):
+        return carts.remove_item(conn, cart_id, product_id, settings)
 
     return app
